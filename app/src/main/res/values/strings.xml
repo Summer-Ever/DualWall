@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">DualWall</string>
+    <string name="wallpaper_label">DualWall 双面壁纸</string>
+    <string name="wallpaper_desc">横屏与竖屏使用各自独立的图片与裁切位置</string>
+</resources>

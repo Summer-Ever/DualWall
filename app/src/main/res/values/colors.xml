@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 自适应图标的底色，取自图标边缘渐变的中值；前景为满幅绘制，通常不可见 -->
+    <color name="ic_launcher_background">#7C8FF0</color>
+</resources>
