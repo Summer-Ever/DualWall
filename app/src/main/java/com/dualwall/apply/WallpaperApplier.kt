@@ -75,10 +75,12 @@ object WallpaperApplier {
             WallpaperManager.FLAG_LOCK,
         )
 
+        // setBitmap 是同步拷贝进系统，返回后我们这份就可以释放了
         val dump = File(context.cacheDir, "lock_${output.width}x${output.height}.png")
         runCatching {
             dump.outputStream().use { output.compress(Bitmap.CompressFormat.PNG, 100, it) }
         }
+        if (!output.isRecycled) output.recycle()
 
         val readBack = runCatching {
             wm.getWallpaperFile(WallpaperManager.FLAG_LOCK)?.use { pfd ->

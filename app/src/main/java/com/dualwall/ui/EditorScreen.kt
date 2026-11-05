@@ -74,7 +74,8 @@ fun EditorScreen() {
     var bitmap by remember { mutableStateOf<Bitmap?>(null) }
     var crash by remember { mutableStateOf<String?>(null) }
 
-    LaunchedEffect(Unit) { crash = CrashLog.read(context) }
+    // 读崩溃现场是文件 IO，挪到后台线程，别在冷启动时卡主线程
+    LaunchedEffect(Unit) { crash = withContext(Dispatchers.IO) { CrashLog.read(context) } }
 
     val layer = recipe.of(profile)
     // 旋转、PC 模式、分屏都会改 Configuration —— 必须跟着重算，否则视口会停在旧方向
@@ -86,7 +87,8 @@ fun EditorScreen() {
     LaunchedEffect(layer.imagePath) {
         bitmap = withContext(Dispatchers.IO) {
             layer.imagePath?.let { path ->
-                runCatching { ImageStore.load(path, maxLongSide = 2400) }.getOrNull()
+                // 预览画布在屏幕上最多约 1400px 宽，没必要解码到视口全尺寸
+                runCatching { ImageStore.load(path, maxLongSide = 1400) }.getOrNull()
             }
         }
     }

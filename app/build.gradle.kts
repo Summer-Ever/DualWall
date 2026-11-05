@@ -12,8 +12,8 @@ android {
         applicationId = "com.dualwall"
         minSdk = 30
         targetSdk = 35
-        versionCode = 4
-        versionName = "0.1.3"
+        versionCode = 5
+        versionName = "0.1.4"
     }
 
     buildFeatures {
@@ -31,7 +31,11 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            // 暂无正式签名密钥，先用 debug 签名出包，方便安装对比体积
+            signingConfig = signingConfigs.getByName("debug")
         }
     }
 

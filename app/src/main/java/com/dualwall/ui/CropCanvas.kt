@@ -124,7 +124,9 @@ private fun DrawScope.drawPreview(
         srcSize = IntSize(r.width, r.height),
         dstOffset = IntOffset(d.left, d.top),
         dstSize = IntSize(d.width, d.height),
-        filterQuality = FilterQuality.High,
+        // 预览用 Medium 足够：拖动时每帧都重绘，High 的双三次缩放对大图是明显开销。
+        // 这里是构图参考，最终成图由壁纸服务用高质量 filter 生成，两回事。
+        filterQuality = FilterQuality.Medium,
     )
 
     val grid = Color.White.copy(alpha = 0.13f)
