@@ -6,7 +6,15 @@
 
 <p align="center">安卓平板上的双方向壁纸工具：横屏与竖屏各用一张图、各有一套裁切位置，应用后不位移、不拉伸、不二次裁切。</p>
 
-针对联想 ZUI / 类原生系统（ZUI 16 = Android 14）开发，`minSdk 30`，无任何第三方 SDK。
+<p align="center">
+  <a href="https://github.com/Summer-Ever/DualWall/releases/latest"><img src="https://img.shields.io/github/v/release/Summer-Ever/DualWall?include_prereleases&label=release" alt="release"></a>
+  <img src="https://img.shields.io/badge/minSdk-30-3DDC84" alt="minSdk">
+  <img src="https://img.shields.io/badge/Kotlin-Jetpack%20Compose-7F52FF" alt="Kotlin">
+</p>
+
+针对联想 ZUI / 类原生系统（ZUI 16 = Android 14）开发，`minSdk 30`，无任何第三方 SDK、不联网。
+
+**直接下载安装** → [Releases](https://github.com/Summer-Ever/DualWall/releases/latest)（下载 `.apk`，允许「未知来源」即可）。
 
 ## 为什么是动态壁纸
 
