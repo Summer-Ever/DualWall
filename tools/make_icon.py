@@ -10,9 +10,9 @@ import os
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter
 
-SRC = ".icon/source.png"
+SRC = "docs/icon-source.png"
 OUT = "app/src/main/res"
-BOOT = ".icon"
+BOOT = ".icon"  # 中间产物，已被 .gitignore 忽略
 # 源图圆角方形本体约在 61..963，向内收到 100..924 以避开其边缘的暗色描边与投影
 CROP = (120, 120, 904, 904)
 
