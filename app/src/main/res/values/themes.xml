@@ -1,5 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!--
+      系统栏颜色说明：
+      运行期由 MainActivity 的 enableEdgeToEdge() 接管（系统栏透明、内容向后延伸、
+      图标固定浅色）。这里的 statusBarColor / navigationBarColor 只在冷启动那一瞬
+      （窗口尚未 attach）起作用，用来避免闪白。
+      注意：targetSdk 35 在 Android 15+ 上会忽略这两个属性，属预期行为。
+    -->
     <style name="Theme.DualWall" parent="android:Theme.Material.NoActionBar">
         <item name="android:windowBackground">#121316</item>
         <item name="android:statusBarColor">#121316</item>

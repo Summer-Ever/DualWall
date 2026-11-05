@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -124,7 +125,14 @@ fun EditorScreen() {
         }
     }
 
-    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 12.dp)) {
+    // safeDrawingPadding：edge-to-edge 下避开状态栏、导航栏、刘海与手势区，
+    // 背景色仍由外层 Surface 铺满整屏，系统栏区域只留干净底色。
+    Column(
+        Modifier
+            .fillMaxSize()
+            .safeDrawingPadding()
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+    ) {
         crash?.let { text ->
             CrashBanner(text) {
                 CrashLog.clear(context)
