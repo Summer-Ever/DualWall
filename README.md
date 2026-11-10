@@ -61,7 +61,7 @@ core/   纯 JVM：裁切几何 + 单元测试（15 例）
 app/
   data/       Recipe / RecipeStore / ImageStore
   render/     Viewport 探测、合成
-  apply/      WallpaperApplier（动态 / 静态双通道 + 回读校验）
+  apply/      WallpaperApplier（动态 / 静态双通道 + 视口尺寸校验）
   wallpaper/  DualWallpaperService（引擎）
   ui/         EditorScreen / CropCanvas（Compose）
 ```
@@ -87,7 +87,7 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 1. 顶部切到「横屏」→ 选图 → 拖动调整构图、双指或滑块缩放；
 2. 切到「竖屏」→ 可为竖屏单独选另一张图，裁切独立保存；
 3. 「应用到桌面（动态壁纸）」→ 系统确认页 → 设为壁纸；
-4. 「单独设置锁屏」按需使用，会回读校验尺寸并在被系统改写时明确提示。
+4. 「单独设置锁屏」按需使用，输出位图严格等于当前视口尺寸；若锁屏仍出现位移，说明系统做了二次裁切。
 
 ## 已知限制
 

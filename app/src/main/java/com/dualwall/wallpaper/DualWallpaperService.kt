@@ -7,6 +7,7 @@ import android.graphics.Paint
 import android.graphics.Rect
 import android.graphics.RectF
 import android.os.Handler
+import android.os.HandlerThread
 import android.os.Looper
 import android.service.wallpaper.WallpaperService
 import android.util.Log
@@ -26,60 +27,102 @@ import com.dualwall.data.RecipeStore
  * 2. 配方存归一化锚点 + 缩放，任何分辨率下构图一致；
  * 3. onOffsetsChanged 空实现 —— 桌面翻页不产生任何位移。
  *
- * 绘制走 drawBitmap(src, srcRect, dstRect)：srcRect 严格是视口比例，
- * dstRect 是整块画布，因此缩放均匀、没有第二次裁切。
+ * 解码全部在 Service 唯一的后台线程执行；主线程只做绘制，且同一时刻
+ * 每个 Engine 只保留一个待解码请求。壁纸隐藏时立刻释放位图，回到桌面再按需解码。
  */
 class DualWallpaperService : WallpaperService() {
 
+    // 所有 Engine 共享一条解码线程：空闲时阻塞在 Looper 上，不产生轮询与唤醒。
+    private val decodeThread = HandlerThread("DualWallDecode").apply { start() }
+    private val decodeHandler = Handler(decodeThread.looper)
+
+    override fun onDestroy() {
+        decodeHandler.removeCallbacksAndMessages(null)
+        decodeThread.quitSafely()
+        super.onDestroy()
+    }
+
     override fun onCreateEngine(): Engine = DualEngine()
+
     private inner class DualEngine : Engine() {
 
         private val store = RecipeStore(this@DualWallpaperService)
-        private val handler = Handler(Looper.getMainLooper())
-        private val paint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.DITHER_FLAG)
+        private val mainHandler = Handler(Looper.getMainLooper())
+        private val paint = Paint(Paint.FILTER_BITMAP_FLAG)
         private val srcRect = Rect()
         private val dstRect = RectF()
-        private val onRecipeChanged: () -> Unit = { handler.post { reload() } }
+        private val onRecipeChanged: () -> Unit = { mainHandler.post { reload() } }
 
         private var surfaceW = 0
         private var surfaceH = 0
+        private var pendingDecode: Runnable? = null
         private var applied: Layer? = null
         private var bitmap: Bitmap? = null
 
+        @Volatile private var destroyed = false
+
+        @Volatile private var generation = 0L
+
+        @Volatile private var releasedByHide = false
+
         override fun onSurfaceCreated(holder: SurfaceHolder) {
             super.onSurfaceCreated(holder)
-            // ⚠️ 绝对不要在这里调用 setTouchEventsEnabled / setOffsetNotificationsEnabled。
+            // 注意：这里不要调用 setTouchEventsEnabled / setOffsetNotificationsEnabled。
             // 它们在 AOSP 里会走 Engine.updateSurface()，而 updateSurface 在 surface 新建时
-            // 又会回调 onSurfaceCreated —— 直接变成自我递归，几百次后 StackOverflowError，
-            // 整个进程挂掉（表现就是「点应用到桌面，应用直接闪退」）。
-            // 这两个开关默认就是关闭的，我们的 onOffsetsChanged 也是空实现，不设也一样。
+            // 又会回调 onSurfaceCreated，形成自我递归直至栈溢出。这两个开关默认关闭，
+            // onOffsetsChanged 也是空实现，不设置同样满足需求。
             RecipeBus.add(onRecipeChanged)
             Log.d(TAG, "onSurfaceCreated")
         }
 
         override fun onSurfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
             super.onSurfaceChanged(holder, format, width, height)
+            val changed = width != surfaceW || height != surfaceH
             surfaceW = width
             surfaceH = height
             Log.d(TAG, "onSurfaceChanged ${width}x${height}")
+            if (!changed && bitmap != null) {
+                draw()
+                return
+            }
             reload()
         }
 
         override fun onVisibilityChanged(visible: Boolean) {
             super.onVisibilityChanged(visible)
             Log.d(TAG, "onVisibilityChanged visible=$visible")
-            if (visible) draw()
+            if (visible) {
+                releasedByHide = false
+                reload()
+            } else {
+                // 息屏 / 离开桌面：作废旧请求并释放常驻位图
+                releasedByHide = true
+                generation++
+                releaseBitmap()
+            }
         }
 
         override fun onSurfaceDestroyed(holder: SurfaceHolder) {
+            generation++
             RecipeBus.remove(onRecipeChanged)
-            bitmap?.recycle()
-            bitmap = null
+            releaseBitmap()
             applied = null
             super.onSurfaceDestroyed(holder)
         }
 
-        /** 翻页视差：故意什么都不做。 */
+        /** Engine 销毁时兜底解绑，避免全局单例长期持有 Engine 与 Service。 */
+        override fun onDestroy() {
+            destroyed = true
+            generation++
+            RecipeBus.remove(onRecipeChanged)
+            mainHandler.removeCallbacksAndMessages(null)
+            pendingDecode?.let { decodeHandler.removeCallbacks(it) }
+            pendingDecode = null
+            releaseBitmap()
+            super.onDestroy()
+        }
+
+        /** 翻页视差：故意什么都不做，省电且零位移。 */
         override fun onOffsetsChanged(
             xOffset: Float,
             yOffset: Float,
@@ -89,44 +132,55 @@ class DualWallpaperService : WallpaperService() {
             yPixelOffset: Int,
         ) = Unit
 
-        private fun reload() {
-            try {
-                reloadInternal()
-            } catch (t: Throwable) {
-                // 壁纸引擎崩掉会被系统反复重启，表现就是「桌面一直闪 / 应用总崩溃」
-                Log.e(TAG, "reload 失败，退回纯黑", t)
-            }
+        private fun releaseBitmap() {
+            bitmap?.takeIf { !it.isRecycled }?.recycle()
+            bitmap = null
         }
 
-        private fun reloadInternal() {
-            if (surfaceW <= 0 || surfaceH <= 0) return
-            val profile = if (surfaceW >= surfaceH) Profile.LANDSCAPE else Profile.PORTRAIT
-            val layer = store.recipe.of(profile).sanitized()
+        /** 主线程只做配方读取与绘制；真正的读盘解码交给 Service 的解码线程。 */
+        private fun reload() {
+            if (destroyed || releasedByHide || surfaceW <= 0 || surfaceH <= 0) return
+            val gen = ++generation
+            val w = surfaceW
+            val h = surfaceH
+            val profile = if (w >= h) Profile.LANDSCAPE else Profile.PORTRAIT
+            val layer = runCatching { store.recipe.of(profile).sanitized() }
+                .getOrDefault(Layer())
 
-            // 只改了锚点 / 缩放时保留已解码的位图，避免每次调参都重新读盘解码
-            val sameImage = layer.imagePath != null && layer.imagePath == applied?.imagePath
-            applied = layer
-            if (sameImage && bitmap != null) {
+            // 只改了锚点 / 缩放时复用已解码位图，避免每次调参都重新读盘
+            val reusable = layer.imagePath != null && layer.imagePath == applied?.imagePath && bitmap != null
+            if (reusable) {
+                applied = layer
                 draw()
                 return
             }
 
-            bitmap?.takeIf { !it.isRecycled }?.recycle()
-            bitmap = null
-
-            if (layer.ready) {
-                bitmap = decode(layer.imagePath!!, maxOf(surfaceW, surfaceH))
+            // 同一 Engine 只保留最新一次解码请求，队列不会随快速调参无限增长
+            pendingDecode?.let { decodeHandler.removeCallbacks(it) }
+            val task = Runnable {
+                if (destroyed || gen != generation || releasedByHide) return@Runnable
+                val decoded = if (layer.ready) {
+                    ImageStore.loadWithFallback(layer.imagePath!!, maxOf(w, h))
+                } else {
+                    null
+                }
+                if (destroyed || gen != generation || releasedByHide) {
+                    decoded?.takeIf { !it.isRecycled }?.recycle()
+                } else {
+                    mainHandler.post {
+                        if (destroyed || gen != generation || releasedByHide) {
+                            decoded?.takeIf { !it.isRecycled }?.recycle()
+                        } else {
+                            releaseBitmap()
+                            bitmap = decoded
+                            applied = layer
+                            draw()
+                        }
+                    }
+                }
             }
-            Log.d(TAG, "reload ready=${layer.ready} bmp=${bitmap?.width}x${bitmap?.height}")
-            draw()
-        }
-
-        /** 解码失败或首轮就 OOM 时降一档再试，宁可糊一点也不要黑屏。 */
-        private fun decode(path: String, target: Int): Bitmap? {
-            val first = runCatching { ImageStore.load(path, target) }.getOrNull()
-            if (first != null) return first
-            Log.w(TAG, "按 $target 解码失败，降一半重试")
-            return runCatching { ImageStore.load(path, target / 2) }.getOrNull()
+            pendingDecode = task
+            decodeHandler.post(task)
         }
 
         private fun draw() {
@@ -145,7 +199,6 @@ class DualWallpaperService : WallpaperService() {
                     bmp.width, bmp.height, surfaceW, surfaceH,
                     layer.anchorX, layer.anchorY, layer.zoom,
                 )
-                // coverRect：比例一致时就是整块画布，永远等比，不会拉伸
                 val dst = Crop.coverRect(crop.width, crop.height, surfaceW, surfaceH)
                 srcRect.set(crop.left, crop.top, crop.right, crop.bottom)
                 dstRect.set(dst.left.toFloat(), dst.top.toFloat(), dst.right.toFloat(), dst.bottom.toFloat())

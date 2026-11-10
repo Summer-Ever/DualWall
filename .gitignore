@@ -8,6 +8,11 @@ captures/
 .cxx/
 *.apk
 *.aab
+.kotlin/
+*.jks
+*.keystore
+*.pem
+.env*
 .workbuddy/
 .debug/
 .icon/

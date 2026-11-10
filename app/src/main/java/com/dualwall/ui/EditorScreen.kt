@@ -34,6 +34,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -55,8 +56,10 @@ import com.dualwall.data.Layer
 import com.dualwall.data.Profile
 import com.dualwall.data.RecipeStore
 import com.dualwall.render.Viewport
+import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -78,19 +81,55 @@ fun EditorScreen() {
     LaunchedEffect(Unit) { crash = withContext(Dispatchers.IO) { CrashLog.read(context) } }
 
     val layer = recipe.of(profile)
+    val currentPath by rememberUpdatedState(layer.imagePath)
+    // 横竖各一张预览位图，容量固定为 2，来回切换方向不重复读盘解码
+    val previewCache = remember { LinkedHashMap<String, Bitmap>() }
     // 旋转、PC 模式、分屏都会改 Configuration —— 必须跟着重算，否则视口会停在旧方向
     val configuration = LocalConfiguration.current
     val viewport = remember(profile, configuration) {
         Viewport.size(context, profile == Profile.LANDSCAPE)
     }
 
-    LaunchedEffect(layer.imagePath) {
-        bitmap = withContext(Dispatchers.IO) {
-            layer.imagePath?.let { path ->
-                // 预览画布在屏幕上最多约 1400px 宽，没必要解码到视口全尺寸
-                runCatching { ImageStore.load(path, maxLongSide = 1400) }.getOrNull()
+    // 启动时清理历史遗留的图片副本，只保留当前配方仍在引用的两张
+    LaunchedEffect(Unit) {
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val saved = store.recipe
+                ImageStore.prune(
+                    context.applicationContext,
+                    setOfNotNull(saved.portrait.imagePath, saved.landscape.imagePath),
+                )
             }
         }
+    }
+
+    LaunchedEffect(layer.imagePath) {
+        val path = layer.imagePath
+        if (path == null) {
+            bitmap = null
+            return@LaunchedEffect
+        }
+        val cached = previewCache[path]
+        if (cached != null && !cached.isRecycled) {
+            bitmap = cached
+            return@LaunchedEffect
+        }
+        val decoded = withContext(Dispatchers.IO) {
+            // 预览画布在屏幕上最多约 1400px 宽，没必要解码到视口全尺寸
+            runCatching { ImageStore.load(path, maxLongSide = 1400) }.getOrNull()
+        }
+        ensureActive()
+        if (currentPath != path) {
+            decoded?.takeIf { !it.isRecycled }?.recycle()
+            return@LaunchedEffect
+        }
+        if (decoded != null) {
+            if (previewCache.size >= 2 && !previewCache.containsKey(path)) {
+                previewCache.keys.firstOrNull()?.let { previewCache.remove(it) }
+            }
+            previewCache[path] = decoded
+        }
+        bitmap = decoded
     }
 
     fun commit(next: Layer) {
@@ -112,6 +151,7 @@ fun EditorScreen() {
             val result = withContext(Dispatchers.IO) { runCatching { ImageStore.import(context, uri) } }
             busy = false
             result.onSuccess { img ->
+                val previousPath = recipe.of(profile).imagePath
                 commit(
                     layer.copy(
                         imagePath = img.path,
@@ -122,6 +162,10 @@ fun EditorScreen() {
                         zoom = 1f,
                     ),
                 )
+                // 旧副本已不在配方里，立即删除，避免私有目录无限增长
+                if (previousPath != null && previousPath != img.path) {
+                    runCatching { ImageStore.deleteUnused(context.applicationContext, previousPath) }
+                }
                 status = "已导入 ${img.width} × ${img.height}"
             }.onFailure { status = "导入失败：${it.message}" }
         }
@@ -201,7 +245,7 @@ fun EditorScreen() {
                 modifier = Modifier.weight(1f).padding(horizontal = 10.dp),
             )
             Text(
-                text = String.format("%.2f×", layer.zoom),
+                text = String.format(Locale.US, "%.2f×", layer.zoom),
                 fontSize = 12.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

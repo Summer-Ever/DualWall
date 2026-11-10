@@ -2,6 +2,8 @@ package com.dualwall.render
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Paint
 import android.graphics.Rect
 import android.hardware.display.DisplayManager
 import android.util.DisplayMetrics
@@ -9,6 +11,7 @@ import android.util.Log
 import android.util.Size
 import android.view.Display
 import android.view.WindowManager
+import androidx.core.graphics.createBitmap
 import com.dualwall.core.Crop
 import com.dualwall.data.Layer
 
@@ -65,8 +68,11 @@ object Viewport {
 object Cropper {
 
     /**
-     * 按配方把原图裁成严格 [dstW]×[dstH] 的位图。
-     * 因为裁切框宽高比与目标严格一致，这里的缩放是均匀的，不会变形、不会二次裁切。
+     * 把裁切框一次绘制到目标尺寸的位图上，只分配一张输出位图。
+     * 不再产生 createBitmap 中间副本与 createScaledBitmap 第二副本，
+     * 也避开 AOSP createBitmap 在整图裁切时原样返回 source 带来的所有权混淆。
+     *
+     * [source] 的所有权完全归调用方，本函数不会回收它。
      */
     fun render(source: Bitmap, layer: Layer, dstW: Int, dstH: Int): Bitmap {
         if (dstW <= 0 || dstH <= 0) error("目标尺寸非法：${dstW}×$dstH")
@@ -74,16 +80,23 @@ object Cropper {
             source.width, source.height, dstW, dstH,
             layer.anchorX, layer.anchorY, layer.zoom,
         )
-        val cropped = Bitmap.createBitmap(
-            source,
-            r.left.coerceIn(0, source.width - 1),
-            r.top.coerceIn(0, source.height - 1),
-            r.width.coerceIn(1, source.width),
-            r.height.coerceIn(1, source.height),
+        val left = r.left.coerceIn(0, source.width - 1)
+        val top = r.top.coerceIn(0, source.height - 1)
+        val src = Rect(
+            left,
+            top,
+            r.right.coerceIn(left + 1, source.width),
+            r.bottom.coerceIn(top + 1, source.height),
         )
-        if (cropped.width == dstW && cropped.height == dstH) return cropped
-        val scaled = Bitmap.createScaledBitmap(cropped, dstW, dstH, true)
-        if (scaled !== cropped) cropped.recycle()
-        return scaled
+        val out = createBitmap(dstW, dstH)
+        try {
+            val canvas = Canvas(out)
+            canvas.drawBitmap(source, src, Rect(0, 0, dstW, dstH), Paint(Paint.FILTER_BITMAP_FLAG))
+            canvas.setBitmap(null)
+            return out
+        } catch (t: Throwable) {
+            out.recycle()
+            throw t
+        }
     }
 }
